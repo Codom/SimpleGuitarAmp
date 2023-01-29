@@ -1,0 +1,9 @@
+[submodule "vst3_c_api"]
+	path = vst3_c_api
+	url = https://github.com/steinbergmedia/vst3_c_api
+[submodule "clap"]
+	path = clap
+	url = https://github.com/free-audio/clap
+[submodule "clap-validator"]
+	path = clap-validator
+	url = https://github.com/free-audio/clap-validator
