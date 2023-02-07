@@ -5,6 +5,6 @@
 // Distributed under terms of the MIT license.
 //
 
-usingnamespace @cImport({
+pub usingnamespace @cImport({
     @cInclude("clap/clap.h");
 });

@@ -37,8 +37,8 @@ pub const PluginDescriptor = c.clap_plugin_descriptor {
     .version     = "1.0.0",
     .description = "The ziggiest plugin ever.",
     .features    = &[_][*c]const u8{
-        c.CLAP_PLUGIN_FEATURE_INSTRUMENT,
-        c.CLAP_PLUGIN_FEATURE_SYNTHESIZER,
+        c.CLAP_PLUGIN_FEATURE_AUDIO_EFFECT,
+        c.CLAP_PLUGIN_FEATURE_DISTORTION,
         c.CLAP_PLUGIN_FEATURE_STEREO,
         null, // cringing @ null termination xD
     },
@@ -68,13 +68,17 @@ fn create_plugin(
         return null;
     }
 
+    // setup the host and log to integrate std.log into the host
+    log_args.host = host;
+    log_args.log = @ptrCast([*c]const c.clap_host_log,
+        @alignCast(@alignOf([*c]const c.clap_host_log),
+            host.*.get_extension.?(host, &c.CLAP_EXT_LOG)));
+
     var ret = c_allocator.create(plugin) catch return null;
-    ret.* = .{
-        .host = host,
-        .clap_plugin = PluginClass,
-        .sample_rate = 0,
-        .voices = undefined,
-    };
+    ret.* = std.mem.zeroes(plugin);
+    ret.host = host;
+    ret.clap_plugin = PluginClass;
+    ret.sample_rate = 0;
     ret.clap_plugin.plugin_data = @ptrCast(?*anyopaque, ret);
     return &ret.clap_plugin;
 }
@@ -93,17 +97,29 @@ fn get_factory(factory_id: [*c]const u8) callconv(.C) ?*const anyopaque {
     return null;
 }
 
+// logging specific namespace
+const log_args = struct {
+    var log: [*c]const c.clap_host_log = undefined;
+    var host: [*c]const c.clap_host_t = undefined;
+};
+
 pub fn log(
     comptime level: std.log.Level,
     comptime _: @TypeOf(.EnumLiteral),
     comptime format: []const u8,
     args: anytype,
 ) void {
-    const prefix = "(" ++ level.asText() ++ ") ";
+    var string_sl = std.fmt.allocPrintZ(c_allocator, format, args) catch return;
+    defer c_allocator.destroy(string_sl.ptr);
+    var string: [*c]const u8 = string_sl.ptr;
+    if(log_args.log) |l| {
+        const clap_level = switch(level) {
+            .err => c.CLAP_LOG_ERROR,
+            .warn => c.CLAP_LOG_WARNING,
+            .info => c.CLAP_LOG_INFO,
+            .debug => c.CLAP_LOG_DEBUG,
+        };
 
-    // Print the message to stderr, silently ignoring any errors
-    std.debug.getStderrMutex().lock();
-    defer std.debug.getStderrMutex().unlock();
-    const stderr = std.io.getStdErr().writer();
-    nosuspend stderr.print(prefix ++ format ++ "\n", args) catch return;
+        l.*.log.?(log_args.host, clap_level, string);
+    }
 }
