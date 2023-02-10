@@ -75,7 +75,7 @@ fn create_plugin(
             host.*.get_extension.?(host, &c.CLAP_EXT_LOG)));
 
     var ret = c_allocator.create(plugin) catch return null;
-    ret.* = std.mem.zeroes(plugin);
+    ret.* = plugin.create_plugin();
     ret.host = host;
     ret.clap_plugin = PluginClass;
     ret.sample_rate = 0;
@@ -109,10 +109,13 @@ pub fn log(
     comptime format: []const u8,
     args: anytype,
 ) void {
-    var string_sl = std.fmt.allocPrintZ(c_allocator, format, args) catch return;
-    defer c_allocator.destroy(string_sl.ptr);
-    var string: [*c]const u8 = string_sl.ptr;
+    std.debug.getStderrMutex().lock();
+    defer std.debug.getStderrMutex().unlock();
+
     if(log_args.log) |l| {
+        var string_sl = std.fmt.allocPrintZ(c_allocator, format, args) catch return;
+        defer c_allocator.destroy(string_sl.ptr);
+        var string: [*c]const u8 = string_sl.ptr;
         const clap_level = switch(level) {
             .err => c.CLAP_LOG_ERROR,
             .warn => c.CLAP_LOG_WARNING,
@@ -121,5 +124,12 @@ pub fn log(
         };
 
         l.*.log.?(log_args.host, clap_level, string);
+    }
+    else {
+        const prefix = "[" ++ comptime level.asText() ++ "] ";
+
+        // Print the message to stderr, silently ignoring any errors
+        const stderr = std.io.getStdErr().writer();
+        nosuspend stderr.print(prefix ++ format ++ "\n", args) catch return;
     }
 }

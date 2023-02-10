@@ -10,6 +10,8 @@ const span = std.mem.span;
 const c_allocator = std.heap.c_allocator;
 const c = @import("c.zig");
 
+const ef = @import("effects.zig");
+
 const P = enum(usize) {
     Gain = 0,
     OutputGain,
@@ -24,6 +26,8 @@ clap_plugin: c.clap_plugin_t,
 host:        [*c]const c.clap_host_t,
 sample_rate: f64,
 
+filters:     std.ArrayList(ef.biquad_d2) = undefined,
+
 // Parameter state
 params:       [num_params()]f32,
 main_params:  [num_params()]f32,
@@ -33,6 +37,17 @@ mut:          std.Thread.Mutex,
 
 const Plugin = @This();
 // zig api
+
+pub fn create_plugin() Plugin {
+    var ret: Plugin = undefined;
+    ret.clap_plugin = std.mem.zeroes(c.clap_plugin_t);
+    ret.host = null;
+    ret.params = .{0} ** num_params();
+    ret.main_params = .{0} ** num_params();
+    ret.main_changed = .{false} ** num_params();
+    ret.mut = .{};
+    return ret;
+}
 
 pub fn sync_main_to_audio(plugin: *Plugin, out: [*c]const c.clap_output_events_t) void {
     plugin.mut.lock();
@@ -134,38 +149,31 @@ pub fn process_event(plugin: *Plugin, event: [*c]const c.clap_event_header_t) vo
     }
 }
 
-/// Function that applies a cubic non-linear distortion to a sample
-fn cub_nonl_distortion(in: f32, gain: f32, offset: f32) f32 {
-        const offset_in = in + offset;
-        const pregain = offset_in * std.math.pow(f32, 10.0, gain * 2.0);
-        const clip = std.math.clamp(pregain, -1.0, 1.0);
-        const out = clip - ((clip*clip*clip*clip) / 3.0);
-        return out;
-}
-
 pub fn render_audio(plugin: *Plugin, start: u32, end: u32,
-    input: [*c]f32,
+    inputL: [*c]f32,
+    inputR: [*c]f32,
     outputL: [*c]f32,
     outputR: [*c]f32
 ) void {
     var index: usize = start;
     while(index < end) : (index += 1) {
-        var in: f32 = input[index];
+        var inL: f32 = inputL[index];
+        var inR: f32 = inputR[index];
         const gain = plugin.params[@enumToInt(P.Gain)];
         const output_gain = plugin.params[@enumToInt(P.OutputGain)];
 
-        const out = cub_nonl_distortion(in, gain, 0.0) * output_gain;
+        var distortionL : f32 = ef.cub_nonl_distortion(inL, gain, 0.0) * output_gain;
+        var distortionR : f32 = ef.cub_nonl_distortion(inR, gain, 0.0) * output_gain;
 
-        // for(plugin.voices.items) |*voice| {
-        //     if(!voice.held) continue;
+        var outL: f32 = 0;
+        var outR: f32 = 0;
+        for(plugin.filters.items) |*filter| {
+            outL = filter.process(distortionL);
+            outR = filter.process(distortionR);
+        }
 
-        //     sum += std.math.sin(voice.phase * 2.0 * std.math.pi) * 0.2;
-        //     voice.phase += @floatCast(f32, 440.0 * std.math.exp2((@intToFloat(f32, voice.key) - 57.0) / 12.0) / plugin.sample_rate);
-        //     voice.phase -= std.math.floor(voice.phase);
-        // }
-
-        outputL[index] = out;
-        outputR[index] = out;
+        outputL[index] = outL;
+        outputR[index] = outR;
     }
 }
 
@@ -214,11 +222,11 @@ const ExtensionAudioPorts = struct {
         if(index != 0) return false;
         if(is_input) {
             info.*.id = 0;
-            info.*.channel_count = 1;
+            info.*.channel_count = 2;
             info.*.flags = c.CLAP_AUDIO_PORT_IS_MAIN;
-            info.*.port_type = &c.CLAP_PORT_MONO;
+            info.*.port_type = &c.CLAP_PORT_STEREO;
             info.*.in_place_pair = c.CLAP_INVALID_ID;
-            std.log.info("{s}", .{std.fmt.bufPrintZ(info.*.name[0..], "Audio Input", .{}) catch unreachable});
+            _ = std.fmt.bufPrintZ(info.*.name[0..], "Audio Input", .{}) catch unreachable;
             return true;
         }
         else {
@@ -227,7 +235,7 @@ const ExtensionAudioPorts = struct {
             info.*.flags = c.CLAP_AUDIO_PORT_IS_MAIN;
             info.*.port_type = &c.CLAP_PORT_STEREO;
             info.*.in_place_pair = c.CLAP_INVALID_ID;
-            std.log.info("{s}", .{std.fmt.bufPrintZ(info.*.name[0..], "Audio Output", .{}) catch unreachable});
+            _ = std.fmt.bufPrintZ(info.*.name[0..], "Audio Output", .{}) catch unreachable;
             return true;
         }
     }
@@ -278,7 +286,7 @@ const ExtensionParams = struct {
             info.*.flags = c.CLAP_PARAM_IS_AUTOMATABLE | c.CLAP_PARAM_IS_MODULATABLE;
             info.*.min_value = 0.0;
             info.*.max_value = 1.0;
-            info.*.default_value = 1.0;
+            info.*.default_value = 0.2;
             _ = std.fmt.bufPrintZ(info.*.name[0..], "Output Gain", .{}) catch unreachable;
             return true;
         }
@@ -311,7 +319,7 @@ const ExtensionParams = struct {
         var i = @intCast(u32, id);
         if(i >= num_params()) return false;
 
-        _ = std.fmt.bufPrintZ(display[0..size], "{d}", .{value}) catch unreachable;
+        _ = std.fmt.bufPrintZ(display[0..size], "{d:.2}", .{value}) catch unreachable;
         return true;
     }
 
@@ -430,13 +438,15 @@ callconv(.C) bool {
     _ = min_frames_count; _ = max_frames_count;
     var plugin = ptr_as(*Plugin, _plugin.*.plugin_data);
     plugin.sample_rate = sample_rate;
+    plugin.filters = std.ArrayList(ef.biquad_d2).init(c_allocator);
+    plugin.filters.append(ef.biquad_d2.apply_peak_eq_filter(plugin.sample_rate, 1000, 2.0, 1.0)) catch unreachable;
     return true;
 }
 
 fn deactivate_plugin(_plugin: [*c]const c.clap_plugin_t)
 callconv(.C) void {
     var plugin = ptr_as(*Plugin, _plugin.*.plugin_data);
-    _ = plugin;
+    plugin.filters.deinit();
 }
 
 fn start_processing(_plugin: [*c]const c.clap_plugin_t)
@@ -456,7 +466,6 @@ fn reset(_plugin: [*c]const c.clap_plugin_t)
 callconv(.C) void {
     var plugin = ptr_as(*Plugin, _plugin.*.plugin_data);
     _ = plugin;
-    // plugin.voices.deinit();
 }
 
 fn process(_plugin: [*c]const c.clap_plugin_t, _process: [*c]const c.clap_process)
@@ -495,7 +504,7 @@ callconv(.C) c.clap_process_status {
         }
 
         plugin.render_audio(i, next_event_frame,
-            _process.*.audio_inputs[0].data32[0],
+            _process.*.audio_inputs[0].data32[0], _process.*.audio_inputs[0].data32[1],
             _process.*.audio_outputs[0].data32[0], _process.*.audio_outputs[0].data32[1]);
         i = next_event_frame;
     }
