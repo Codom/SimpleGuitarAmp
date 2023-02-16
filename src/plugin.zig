@@ -15,6 +15,9 @@ const ef = @import("effects.zig");
 const P = enum(usize) {
     Gain = 0,
     OutputGain,
+    FilterQ,
+    FilterFreq,
+    FilterDb,
     Count,
 };
 
@@ -47,6 +50,13 @@ pub fn create_plugin() Plugin {
     ret.main_changed = .{false} ** num_params();
     ret.mut = .{};
     return ret;
+}
+
+pub fn param_changed(plugin: Plugin) bool {
+    for(plugin.changed) |changed| {
+        if(changed) return true;
+    }
+    return false;
 }
 
 pub fn sync_main_to_audio(plugin: *Plugin, out: [*c]const c.clap_output_events_t) void {
@@ -102,56 +112,16 @@ pub fn process_event(plugin: *Plugin, event: [*c]const c.clap_event_header_t) vo
             var i: u32 = value_ev.*.param_id;
 
             plugin.mut.lock();
-                plugin.params[i] = @floatCast(f32, value_ev.value);
+                plugin.params[i]  = @floatCast(f32, value_ev.value);
                 plugin.changed[i] = true;
             plugin.mut.unlock();
         }
-    //     if(
-    //         event.*.type == c.CLAP_EVENT_NOTE_ON or
-    //         event.*.type == c.CLAP_EVENT_NOTE_OFF or
-    //         event.*.type == c.CLAP_EVENT_NOTE_CHOKE
-    //     ) {
-    //         const note_event = @ptrCast([*c]const c.clap_event_note_t, @alignCast(@alignOf([*c]const c.clap_event_note_t), event));
-
-    //         // If the event matches a voice, then it must be a note release
-    //         var i: usize = 0;
-    //         while(i < plugin.voices.items.len) : (i+=1) {
-    //             var voice = &plugin.voices.items[i];
-
-    //             if((note_event.*.key == -1 or voice.key == note_event.*.key)
-    //             and (note_event.*.note_id == -1 or voice.note_id == note_event.*.note_id)
-    //             and (note_event.*.channel == -1 or voice.channel == note_event.*.channel)
-    //             ) {
-    //                 if(event.*.type == c.CLAP_EVENT_NOTE_CHOKE) {
-    //                     _ = plugin.voices.swapRemove(i);
-    //                     if(i != 0) i -= 1;
-    //                 } else {
-    //                     voice.held = false;
-    //                 }
-    //             }
-    //         }
-
-
-    //         // If this is a note on event, create a new voice
-    //         if(event.*.type == c.CLAP_EVENT_NOTE_ON) {
-    //             const voice = Voice {
-    //                 .held = true,
-    //                 .note_id = note_event.*.note_id,
-    //                 .channel = note_event.*.channel,
-    //                 .key = note_event.*.key,
-    //                 .phase = 0.0,
-    //             };
-
-    //             plugin.voices.append(voice) catch unreachable;
-    //         }
-    //     }
-    // }
     }
 }
 
 pub fn render_audio(plugin: *Plugin, start: u32, end: u32,
-    inputL: [*c]f32,
-    inputR: [*c]f32,
+    inputL:  [*c]f32,
+    inputR:  [*c]f32,
     outputL: [*c]f32,
     outputR: [*c]f32
 ) void {
@@ -159,18 +129,22 @@ pub fn render_audio(plugin: *Plugin, start: u32, end: u32,
     while(index < end) : (index += 1) {
         var inL: f32 = inputL[index];
         var inR: f32 = inputR[index];
+
         const gain = plugin.params[@enumToInt(P.Gain)];
         const output_gain = plugin.params[@enumToInt(P.OutputGain)];
 
-        var distortionL : f32 = ef.cub_nonl_distortion(inL, gain, 0.0) * output_gain;
-        var distortionR : f32 = ef.cub_nonl_distortion(inR, gain, 0.0) * output_gain;
-
-        var outL: f32 = 0;
-        var outR: f32 = 0;
+        var eqL: f32 = 0;
+        var eqR: f32 = 0;
         for(plugin.filters.items) |*filter| {
-            outL = filter.process(distortionL);
-            outR = filter.process(distortionR);
+            eqL = filter.process(inL);
+            eqR = filter.process(inR);
         }
+
+        var distortionL : f32 = ef.cub_nonl_distortion(eqL, gain, 0.0) * output_gain;
+        var distortionR : f32 = ef.cub_nonl_distortion(eqR, gain, 0.0) * output_gain;
+
+        const outL = distortionL;
+        const outR = distortionR;
 
         outputL[index] = outL;
         outputR[index] = outR;
@@ -269,7 +243,12 @@ const ExtensionParams = struct {
     fn get_info(_plugin: [*c] const c.clap_plugin_t, index: u32, info: [*c] c.clap_param_info)
     callconv(.C) bool {
         _ = _plugin;
-        if(index == @enumToInt(P.Gain)) {
+        if(index > num_params()) {
+            return false;
+        }
+
+        switch(@intToEnum(P, index)) {
+        P.Gain => {
             info.* = std.mem.zeroes(c.clap_param_info);
             info.*.id = index;
             info.*.flags = c.CLAP_PARAM_IS_AUTOMATABLE | c.CLAP_PARAM_IS_MODULATABLE;
@@ -278,9 +257,9 @@ const ExtensionParams = struct {
             info.*.default_value = 0.5;
             _ = std.fmt.bufPrintZ(info.*.name[0..], "Gain", .{}) catch unreachable;
             return true;
-        }
+        },
 
-        if(index == @enumToInt(P.OutputGain)) {
+        P.OutputGain => {
             info.* = std.mem.zeroes(c.clap_param_info);
             info.*.id = index;
             info.*.flags = c.CLAP_PARAM_IS_AUTOMATABLE | c.CLAP_PARAM_IS_MODULATABLE;
@@ -289,9 +268,46 @@ const ExtensionParams = struct {
             info.*.default_value = 0.2;
             _ = std.fmt.bufPrintZ(info.*.name[0..], "Output Gain", .{}) catch unreachable;
             return true;
-        }
+        },
 
-        return false;
+        P.FilterQ => {
+            info.* = std.mem.zeroes(c.clap_param_info);
+            info.*.id = index;
+            info.*.flags = c.CLAP_PARAM_IS_AUTOMATABLE | c.CLAP_PARAM_IS_MODULATABLE;
+            info.*.min_value = 0.1;
+            info.*.max_value = 40.0;
+            info.*.default_value = 1.0;
+            _ = std.fmt.bufPrintZ(info.*.name[0..], "Q", .{}) catch unreachable;
+            return true;
+        },
+
+        P.FilterFreq => {
+            info.* = std.mem.zeroes(c.clap_param_info);
+            info.*.id = index;
+            info.*.flags = c.CLAP_PARAM_IS_AUTOMATABLE | c.CLAP_PARAM_IS_MODULATABLE;
+            info.*.min_value = 20.00;
+            info.*.max_value = 20000.0;
+            info.*.default_value = 520.0;
+            _ = std.fmt.bufPrintZ(info.*.name[0..], "Filter Freq", .{}) catch unreachable;
+            return true;
+        },
+
+        P.FilterDb => {
+            info.* = std.mem.zeroes(c.clap_param_info);
+            info.*.id = index;
+            info.*.flags = c.CLAP_PARAM_IS_AUTOMATABLE | c.CLAP_PARAM_IS_MODULATABLE;
+            info.*.min_value = 0.001;
+            info.*.max_value = 10.0;
+            info.*.default_value = 0.0;
+            _ = std.fmt.bufPrintZ(info.*.name[0..], "Filter Db", .{}) catch unreachable;
+            return true;
+        },
+
+        else => {
+            return false;
+        }
+        }
+        unreachable;
     }
 
     fn get_value(_plugin: [*c]const c.clap_plugin_t, id: c.clap_id, value: [*c] f64)
@@ -319,8 +335,17 @@ const ExtensionParams = struct {
         var i = @intCast(u32, id);
         if(i >= num_params()) return false;
 
-        _ = std.fmt.bufPrintZ(display[0..size], "{d:.2}", .{value}) catch unreachable;
-        return true;
+        switch(@intToEnum(P, i)) {
+        P.FilterFreq => {
+            _ = std.fmt.bufPrintZ(display[0..size], "{d:<6.1} hz", .{value}) catch unreachable;
+            return true;
+        },
+
+        else => {
+            _ = std.fmt.bufPrintZ(display[0..size], "{d:.2}", .{value}) catch unreachable;
+            return true;
+        }
+        }
     }
 
     fn text_to_value(_plugin: [*c]const c.clap_plugin_t, id: c.clap_id, display: [*c]const u8, value: [*c] f64)
@@ -439,7 +464,7 @@ callconv(.C) bool {
     var plugin = ptr_as(*Plugin, _plugin.*.plugin_data);
     plugin.sample_rate = sample_rate;
     plugin.filters = std.ArrayList(ef.biquad_d2).init(c_allocator);
-    plugin.filters.append(ef.biquad_d2.apply_peak_eq_filter(plugin.sample_rate, 1000, 2.0, 1.0)) catch unreachable;
+    plugin.filters.append(ef.biquad_d2.init_peak(520, 2.3, 1.0, plugin.sample_rate)) catch unreachable;
     return true;
 }
 
@@ -477,6 +502,16 @@ callconv(.C) c.clap_process_status {
     std.testing.expect(_process.*.audio_outputs_count == 1) catch unreachable;
     std.testing.expect(_process.*.audio_inputs_count == 1) catch unreachable;
 
+    if(plugin.param_changed()) {
+        const new_q = plugin.params[@enumToInt(P.FilterQ)];
+        plugin.filters.items[0].set_peak(
+            plugin.params[@enumToInt(P.FilterFreq)],
+            new_q,
+            plugin.params[@enumToInt(P.FilterDb)],
+            plugin.sample_rate,
+        );
+    }
+
     const frame_count = _process.*.frames_count;
     const input_event_count = _process.*.in_events.*.size.?(_process.*.in_events);
 
@@ -507,6 +542,10 @@ callconv(.C) c.clap_process_status {
             _process.*.audio_inputs[0].data32[0], _process.*.audio_inputs[0].data32[1],
             _process.*.audio_outputs[0].data32[0], _process.*.audio_outputs[0].data32[1]);
         i = next_event_frame;
+    }
+
+    for(plugin.filters.items) |*filter| {
+        filter.bi_sanitize();
     }
 
     return c.CLAP_PROCESS_CONTINUE;
