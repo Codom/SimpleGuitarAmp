@@ -40,7 +40,24 @@ pub const biquad_d2 = struct {
     b2: f64,
     a2: f64,
 
+    /// Returns a zero-init biquad
+    pub inline fn init() @This() {
+        return std.mem.zeroes(@This());
+    }
+
     pub inline fn init_bandpass(freq_center: f64, q: f64, gain: f64, sample_rate: f64) @This() {
+        var ret = std.mem.zeroes(@This());
+        ret.set_bandpass(freq_center, q, gain, sample_rate);
+        return ret;
+    }
+
+    pub inline fn init_peak(freq_center: f64, q: f64, gain: f64, sample_rate: f64) @This() {
+        var ret = std.mem.zeroes(@This());
+        ret.set_peak(freq_center, q, gain, sample_rate);
+        return ret;
+    }
+
+    pub inline fn set_bandpass(self: *@This(), freq_center: f64, q: f64, gain: f64, sample_rate: f64) void {
         const omega = 2.0 * m.pi * freq_center / sample_rate;
         const sn = m.sin(omega);
         const cs = m.cos(omega);
@@ -48,19 +65,11 @@ pub const biquad_d2 = struct {
 
         const inv = 1.0 / (1.0 + alpha);
 
-        return @This() {
-            .a0 = gain * inv * alpha,
-            .a1 = 0.0,
-            .a2 = -gain * inv * alpha,
-            .b1 = -2 * cs * inv,
-            .b2 = (1 - alpha) * inv,
-        };
-    }
-
-    pub inline fn init_peak(freq_center: f64, q: f64, gain: f64, sample_rate: f64) @This() {
-        var ret = std.mem.zeroes(@This());
-        ret.set_peak(freq_center, q, gain, sample_rate);
-        return ret;
+        self.a0 = gain * inv * alpha;
+        self.a1 = 0.0;
+        self.a2 = -gain * inv * alpha;
+        self.b1 = -2 * cs * inv;
+        self.b2 = (1 - alpha) * inv;
     }
 
     pub inline fn set_peak(self: *@This(), freq_center: f64, q: f64, gain: f64, sample_rate: f64) void { 

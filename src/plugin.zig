@@ -10,14 +10,16 @@ const span = std.mem.span;
 const c_allocator = std.heap.c_allocator;
 const c = @import("c.zig");
 
+const m = std.math;
+
 const ef = @import("effects.zig");
 
 const P = enum(usize) {
     Gain = 0,
     OutputGain,
-    FilterQ,
-    FilterFreq,
-    FilterDb,
+    Bass,
+    Mid,
+    Treble,
     Count,
 };
 
@@ -130,18 +132,21 @@ pub fn render_audio(plugin: *Plugin, start: u32, end: u32,
         var inL: f32 = inputL[index];
         var inR: f32 = inputR[index];
 
-        const gain = plugin.params[@enumToInt(P.Gain)];
+        // params
+        const gain        = plugin.params[@enumToInt(P.Gain)];
         const output_gain = plugin.params[@enumToInt(P.OutputGain)];
 
-        var eqL: f32 = 0;
-        var eqR: f32 = 0;
+        // Filters
         for(plugin.filters.items) |*filter| {
-            eqL = filter.process(inL);
-            eqR = filter.process(inR);
+            inL = filter.process(inL);
+            inR = filter.process(inR);
         }
+        const eqL = inL;
+        const eqR = inR;
 
-        var distortionL : f32 = ef.cub_nonl_distortion(eqL, gain, 0.0) * output_gain;
-        var distortionR : f32 = ef.cub_nonl_distortion(eqR, gain, 0.0) * output_gain;
+        // Distortion
+        const distortionL : f32 = ef.cub_nonl_distortion(eqL, gain, 0.0) * output_gain;
+        const distortionR : f32 = ef.cub_nonl_distortion(eqR, gain, 0.0) * output_gain;
 
         const outL = distortionL;
         const outR = distortionR;
@@ -270,36 +275,36 @@ const ExtensionParams = struct {
             return true;
         },
 
-        P.FilterQ => {
+        P.Bass => {
             info.* = std.mem.zeroes(c.clap_param_info);
             info.*.id = index;
             info.*.flags = c.CLAP_PARAM_IS_AUTOMATABLE | c.CLAP_PARAM_IS_MODULATABLE;
             info.*.min_value = 0.1;
-            info.*.max_value = 40.0;
-            info.*.default_value = 1.0;
-            _ = std.fmt.bufPrintZ(info.*.name[0..], "Q", .{}) catch unreachable;
+            info.*.max_value = 100.0;
+            info.*.default_value = 50.0;
+            _ = std.fmt.bufPrintZ(info.*.name[0..], "Bass", .{}) catch unreachable;
             return true;
         },
 
-        P.FilterFreq => {
+        P.Mid => {
             info.* = std.mem.zeroes(c.clap_param_info);
             info.*.id = index;
             info.*.flags = c.CLAP_PARAM_IS_AUTOMATABLE | c.CLAP_PARAM_IS_MODULATABLE;
-            info.*.min_value = 20.00;
-            info.*.max_value = 20000.0;
-            info.*.default_value = 520.0;
-            _ = std.fmt.bufPrintZ(info.*.name[0..], "Filter Freq", .{}) catch unreachable;
+            info.*.min_value = 0.01;
+            info.*.max_value = 100.0;
+            info.*.default_value = 50.0;
+            _ = std.fmt.bufPrintZ(info.*.name[0..], "Mid", .{}) catch unreachable;
             return true;
         },
 
-        P.FilterDb => {
+        P.Treble => {
             info.* = std.mem.zeroes(c.clap_param_info);
             info.*.id = index;
             info.*.flags = c.CLAP_PARAM_IS_AUTOMATABLE | c.CLAP_PARAM_IS_MODULATABLE;
-            info.*.min_value = 0.001;
-            info.*.max_value = 10.0;
-            info.*.default_value = 0.0;
-            _ = std.fmt.bufPrintZ(info.*.name[0..], "Filter Db", .{}) catch unreachable;
+            info.*.min_value = 0.01;
+            info.*.max_value = 100.0;
+            info.*.default_value = 50.0;
+            _ = std.fmt.bufPrintZ(info.*.name[0..], "Treble", .{}) catch unreachable;
             return true;
         },
 
@@ -336,15 +341,10 @@ const ExtensionParams = struct {
         if(i >= num_params()) return false;
 
         switch(@intToEnum(P, i)) {
-        P.FilterFreq => {
-            _ = std.fmt.bufPrintZ(display[0..size], "{d:<6.1} hz", .{value}) catch unreachable;
-            return true;
-        },
-
-        else => {
-            _ = std.fmt.bufPrintZ(display[0..size], "{d:.2}", .{value}) catch unreachable;
-            return true;
-        }
+            else => {
+                _ = std.fmt.bufPrintZ(display[0..size], "{d:.2}", .{value}) catch unreachable;
+                return true;
+            }
         }
     }
 
@@ -464,7 +464,11 @@ callconv(.C) bool {
     var plugin = ptr_as(*Plugin, _plugin.*.plugin_data);
     plugin.sample_rate = sample_rate;
     plugin.filters = std.ArrayList(ef.biquad_d2).init(c_allocator);
-    plugin.filters.append(ef.biquad_d2.init_peak(520, 2.3, 1.0, plugin.sample_rate)) catch unreachable;
+
+    plugin.filters.append(ef.biquad_d2.init_peak(  20, 2.3, 0.25, plugin.sample_rate)) catch unreachable;
+    plugin.filters.append(ef.biquad_d2.init_peak( 520, 0.1, 1.00, plugin.sample_rate)) catch unreachable;
+    plugin.filters.append(ef.biquad_d2.init_peak(6000, 2.3, 0.05, plugin.sample_rate)) catch unreachable;
+
     return true;
 }
 
@@ -503,13 +507,13 @@ callconv(.C) c.clap_process_status {
     std.testing.expect(_process.*.audio_inputs_count == 1) catch unreachable;
 
     if(plugin.param_changed()) {
-        const new_q = plugin.params[@enumToInt(P.FilterQ)];
-        plugin.filters.items[0].set_peak(
-            plugin.params[@enumToInt(P.FilterFreq)],
-            new_q,
-            plugin.params[@enumToInt(P.FilterDb)],
-            plugin.sample_rate,
-        );
+        const bass_v = plugin.params[@enumToInt(P.Bass)];
+        const mid_v  = plugin.params[@enumToInt(P.Mid)];
+        const treb_v = plugin.params[@enumToInt(P.Treble)];
+
+        plugin.filters.items[0].set_peak(  20, bass_v, 0.25, plugin.sample_rate);
+        plugin.filters.items[1].set_peak( 520, mid_v,  1.00, plugin.sample_rate);
+        plugin.filters.items[2].set_peak(6000, treb_v, 0.05, plugin.sample_rate);
     }
 
     const frame_count = _process.*.frames_count;
@@ -590,4 +594,23 @@ fn as_const_void(ptr: anytype) ?*const anyopaque {
 
 fn ptr_as(comptime T: anytype, ptr: anytype) T {
     return @ptrCast(T, @alignCast(@alignOf(T), ptr));
+}
+
+fn percent_to_hz(percent: anytype) f64 {
+    return percent_log_scale(percent, 20.0, 20000.0);
+}
+
+// Does a logarithmic interp between the two values with a
+// percentage value.
+fn percent_log_scale(percent: anytype, y1: anytype, y2: anytype) f64 {
+    const logx1   = 1;
+    const logy1  = m.log10(y1);
+
+    const logx2 = m.log10(101.0);
+    const logy2 = m.log10(y2);
+
+    const logx = m.log10(percent + 1);
+    const logy = logy1 + (logx - logx1) * ((logy2 - logy1) / (logx2 - logx1));
+
+    return m.pow(f64, 10, logy);
 }
