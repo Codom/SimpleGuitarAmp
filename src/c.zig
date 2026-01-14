@@ -5,6 +5,6 @@
 // Distributed under terms of the MIT license.
 //
 
-pub usingnamespace @cImport({
+pub const c = @cImport({
     @cInclude("clap/clap.h");
 });

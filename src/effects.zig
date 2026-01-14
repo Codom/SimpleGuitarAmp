@@ -19,13 +19,12 @@ const m = std.math;
 ///
 /// This is taken from the Faust standard library
 pub fn cub_nonl_distortion(in: f32, gain: f32, offset: f32) f32 {
-        const offset_in = in + offset;
-        const pregain = offset_in * std.math.pow(f32, 10.0, gain * 2.0);
-        const clip = std.math.clamp(pregain, -1.0, 1.0);
-        const out = clip - ((clip*clip*clip*clip) / 3.0);
-        return out;
+    const offset_in = in + offset;
+    const pregain = offset_in * std.math.pow(f32, 10.0, gain * 2.0);
+    const clip = std.math.clamp(pregain, -1.0, 1.0);
+    const out = clip - ((clip * clip * clip * clip) / 3.0);
+    return out;
 }
-
 
 /// This is derived from the Robert Bristow-Johnson's equations,
 /// and the specific implementation from the calf audio tools suite.
@@ -61,7 +60,7 @@ pub const biquad_d2 = struct {
         const omega = 2.0 * m.pi * freq_center / sample_rate;
         const sn = m.sin(omega);
         const cs = m.cos(omega);
-        const alpha = sn / (2.0*q);
+        const alpha = sn / (2.0 * q);
 
         const inv = 1.0 / (1.0 + alpha);
 
@@ -72,7 +71,7 @@ pub const biquad_d2 = struct {
         self.b2 = (1 - alpha) * inv;
     }
 
-    pub inline fn set_peak(self: *@This(), freq_center: f64, q: f64, gain: f64, sample_rate: f64) void { 
+    pub inline fn set_peak(self: *@This(), freq_center: f64, q: f64, gain: f64, sample_rate: f64) void {
         const A = m.sqrt(gain);
         const w0 = freq_center * 2 * m.pi * (1.0 / sample_rate);
         const alpha = m.sin(w0) / (2 * q);
@@ -93,9 +92,9 @@ pub const biquad_d2 = struct {
     }
 
     /// Processes input n sample
-    pub inline fn process (
+    pub inline fn process(
         self: *@This(),
-        in:  f32,
+        in: f32,
     ) f32 {
         var n: f32 = in;
         normalize(&n);
@@ -110,14 +109,14 @@ pub const biquad_d2 = struct {
 
         // std.log.info("{d}, {d}, {d}", .{tmp, self.w1, self.w2});
 
-        return @floatCast(f32, out);
+        return @floatCast(out);
     }
 };
 
 fn normalize(n: anytype) void {
     assert_float_ptr(n);
 
-    if(!m.isNormal(n.*)) {
+    if (!m.isNormal(n.*)) {
         n.* = 0;
     }
 }
@@ -125,13 +124,13 @@ fn normalize(n: anytype) void {
 fn sanitize(n: anytype) void {
     assert_float_ptr(n);
 
-    const small_value = (1.0/16777216.0);
-    if(@fabs(n.*) < small_value) n.* = 0;
+    const small_value = (1.0 / 16777216.0);
+    if (@abs(n.*) < small_value) n.* = 0;
 }
 
 fn assert_float_ptr(n: anytype) void {
     const N = @TypeOf(n);
-    if(N != *f32 and N != *f64) {
+    if (N != *f32 and N != *f64) {
         @compileError("Valid usage of sanitize is on *f32 or *f64");
     }
 }
