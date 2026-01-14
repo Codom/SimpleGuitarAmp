@@ -6,7 +6,7 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
-    const clap_mod = b.addModule("clap-tutorial", .{
+    const clap_mod = b.addModule("ZigGuitarAmp", .{
         .root_source_file = b.path("src/main.zig"),
         .target = target,
         .optimize = optimize,
@@ -20,6 +20,6 @@ pub fn build(b: *std.Build) void {
     });
     lib.linkLibC();
     const clap_dep = b.dependency("clap", .{});
-    lib.addIncludePath(clap_dep.path("include"));   b.installArtifact(lib);
-
+    lib.addIncludePath(clap_dep.path("include"));
+    b.installArtifact(lib);
 }

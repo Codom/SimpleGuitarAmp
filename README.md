@@ -9,6 +9,8 @@ Only supports the Clap C api.
 Clap entrypoint and related metadata is in src/main.zig and the plugin
 function pointers are located in src/plugin.zig.
 
+![](./BitwigScreenshot.png)
+
 ## Building and Installing
 
 To build, you need to install the Zig compiler and checkout this repository

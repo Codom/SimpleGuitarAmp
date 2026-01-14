@@ -31,7 +31,7 @@ clap_plugin: c.clap_plugin_t,
 host: [*c]const c.clap_host_t,
 sample_rate: f64,
 
-filters: std.ArrayList(ef.biquad_d2) = undefined,
+filters: std.ArrayList(ef.biquad_d2) = .{},
 
 // Parameter state
 params: [num_params()]f32,
